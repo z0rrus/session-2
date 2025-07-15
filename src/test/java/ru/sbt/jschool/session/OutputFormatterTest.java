@@ -28,72 +28,60 @@ import ru.sbt.jschool.session2.OutputFormatter;
 
 import static org.junit.Assert.assertEquals;
 
-/**
- */
 public class OutputFormatterTest {
-    @Test public void testFormatter0() throws Exception {
-        doTest("0");
-    }
-
-    @Test public void testFormatter1() throws Exception {
-        doTest("1");
-    }
-
-    @Test public void testFormatter2() throws Exception {
-        doTest("2");
-    }
-
-    @Test public void testFormatter3() throws Exception {
-        doTest("3");
-    }
-
-    @Test public void testFormatter4() throws Exception {
-        doTest("4");
-    }
+    @Test public void testFormatter0() throws Exception { doTest("0"); }
+    @Test public void testFormatter1() throws Exception { doTest("1"); }
+    @Test public void testFormatter2() throws Exception { doTest("2"); }
+    @Test public void testFormatter3() throws Exception { doTest("3"); }
+    @Test public void testFormatter4() throws Exception { doTest("4"); }
 
     private void doTest(String dir) throws Exception {
         Scanner sc = new Scanner(OutputFormatterTest.class.getResourceAsStream("/" + dir + "/input.csv"));
 
         int size = Integer.valueOf(sc.nextLine());
-
         String[] types = sc.nextLine().split(",");
-
         String[] names = sc.nextLine().split(",");
 
         Object[][] data = new Object[size][];
-        for (int i=0; i<size; i++) {
+        for (int i = 0; i < size; i++) {
             String[] strLine = sc.nextLine().split(",", -1);
-
             Object[] line = new Object[strLine.length];
-
-            for (int j = 0; j < strLine.length; j++)
+            for (int j = 0; j < strLine.length; j++) {
                 line[j] = format(strLine[j], types[j]);
-
+            }
             data[i] = line;
         }
 
+        // Запись в временный файл
         File temp = File.createTempFile("test" + dir, "txt");
-
         temp.deleteOnExit();
-        try(FileOutputStream output = new FileOutputStream(temp)) {
+        try (FileOutputStream output = new FileOutputStream(temp)) {
             OutputFormatter formatter = new OutputFormatter(new PrintStream(output));
-
             formatter.output(names, data);
         }
 
+        // Вывод в консоль для наглядности
+        System.out.println("=== Test " + dir + " output ===");
+        OutputFormatter formatterConsole = new OutputFormatter(System.out);
+        formatterConsole.output(names, data);
+        System.out.println("=== End of test " + dir + " output ===");
+
+        // Проверка с эталонным выводом
         try (Scanner actualOutput = new Scanner(temp);
              Scanner expectedOutput = new Scanner(OutputFormatterTest.class.getResourceAsStream("/" + dir + "/output.txt"))) {
 
             while (expectedOutput.hasNextLine()) {
                 String expected = expectedOutput.nextLine();
 
-                if (!actualOutput.hasNextLine())
-                    throw new AssertionError("Expected output is \"" + expected + "\", but actual output is empty!");
+                if (!actualOutput.hasNextLine()) {
+                    throw new AssertionError(
+                            "Expected output is \"" + expected + "\", but actual output is empty!");
+                }
 
                 String actual = actualOutput.nextLine();
 
-                actual = actual.replace((char)160, (char)32);
-                expected = expected.replace((char)160, (char)32);
+                actual = actual.replace((char) 160, (char) 32);
+                expected = expected.replace((char) 160, (char) 32);
 
                 assertEquals(expected, actual);
             }

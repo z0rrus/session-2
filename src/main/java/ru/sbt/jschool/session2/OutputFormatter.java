@@ -4,31 +4,40 @@ import java.io.PrintStream;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
+import java.util.*;
 
+/**
+ * OutputFormatter with Printer interface.
+ */
 public class OutputFormatter {
     private final PrintStream out;
 
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("dd.MM.yyyy");
-
-    private static final DecimalFormat MONEY_FORMAT;
-    private static final DecimalFormat NUMBER_FORMAT;
-
-    static {
-        DecimalFormatSymbols symbols = new DecimalFormatSymbols(new Locale("ru", "RU"));
-        symbols.setGroupingSeparator(' ');
-        symbols.setDecimalSeparator(',');
-
-        MONEY_FORMAT = new DecimalFormat("#,##0.00", symbols);
-        MONEY_FORMAT.setGroupingUsed(true);
-
-        NUMBER_FORMAT = new DecimalFormat("#,###", symbols);
-        NUMBER_FORMAT.setGroupingUsed(true);
-    }
+    private final Map<Class<?>, Printer> knownPrinters = new HashMap<>();
+    private final Printer anyPrinter = new AnyPrinter();
 
     public OutputFormatter(PrintStream out) {
         this.out = out;
+        registerPrinter(new StringPrinter());
+        registerPrinter(new DatePrinter());
+        registerPrinter(new DoublePrinter());
+        registerPrinter(new NumberPrinter());
+    }
+
+    private void registerPrinter(Printer printer) {
+        for (Class<?> clazz : printer.supported()) {
+            knownPrinters.put(clazz, printer);
+        }
+    }
+
+    private Printer getPrinter(Object obj) {
+        if (obj == null) return anyPrinter;
+        Printer p = knownPrinters.get(obj.getClass());
+        if (p != null) return p;
+        // Fallback: ищем подходящего по родству типов
+        for (Map.Entry<Class<?>, Printer> e : knownPrinters.entrySet()) {
+            if (e.getKey().isAssignableFrom(obj.getClass())) return e.getValue();
+        }
+        return anyPrinter;
     }
 
     public void output(String[] names, Object[][] data) {
@@ -39,9 +48,16 @@ public class OutputFormatter {
         int colCount = names.length;
         int rowCount = data.length;
 
-        Class<?>[] types = new Class<?>[colCount];
+        Printer[] colPrinters = new Printer[colCount];
         for (int c = 0; c < colCount; c++) {
-            types[c] = inferColumnType(data, c);
+            Object firstNotNull = null;
+            for (int r = 0; r < rowCount; r++) {
+                if (data[r][c] != null) {
+                    firstNotNull = data[r][c];
+                    break;
+                }
+            }
+            colPrinters[c] = getPrinter(firstNotNull);
         }
 
         int[] colWidths = new int[colCount];
@@ -52,14 +68,13 @@ public class OutputFormatter {
         String[][] formattedData = new String[rowCount][colCount];
         for (int r = 0; r < rowCount; r++) {
             for (int c = 0; c < colCount; c++) {
-                String formatted = formatCell(data[r][c], types[c]);
+                String formatted = colPrinters[c].print(data[r][c]);
                 formattedData[r][c] = formatted;
                 if (formatted.length() > colWidths[c]) {
                     colWidths[c] = formatted.length();
                 }
             }
         }
-        
 
         printBorder(colWidths);
 
@@ -75,8 +90,10 @@ public class OutputFormatter {
         for (int r = 0; r < rowCount; r++) {
             out.print("|");
             for (int c = 0; c < colCount; c++) {
+                Printer printer = colPrinters[c];
                 String cell = formattedData[r][c];
-                if (types[c] == String.class) {
+                // Left-align text, right-align numbers/dates
+                if (printer instanceof StringPrinter) {
                     out.print(leftAlign(cell, colWidths[c]));
                 } else {
                     out.print(rightAlign(cell, colWidths[c]));
@@ -88,39 +105,7 @@ public class OutputFormatter {
         }
     }
 
-    private Class<?> inferColumnType(Object[][] data, int colIndex) {
-        for (Object[] row : data) {
-            Object val = row[colIndex];
-            if (val != null) {
-                if (val instanceof Date) return Date.class;
-                if (val instanceof Float || val instanceof Double) return Double.class;
-                if (val instanceof Integer || val instanceof Long || val instanceof Short || val instanceof Byte)
-                    return Long.class;
-                return String.class;
-            }
-        }
-        return String.class;
-    }
-
-    private String formatCell(Object value, Class<?> type) {
-        if (value == null) {
-            return "-";
-        }
-        if (type == String.class) {
-            return value.toString().replace("\n", " ");
-        } else if (type == Date.class) {
-            return DATE_FORMAT.format((Date) value);
-        } else if (type == Double.class) {
-            double d = ((Number) value).doubleValue();
-            return MONEY_FORMAT.format(d);
-        } else if (type == Long.class) {
-            long l = ((Number) value).longValue();
-            return NUMBER_FORMAT.format(l);
-        } else {
-            return value.toString();
-        }
-    }
-
+    // Border and alignment helpers
     private void printBorder(int[] colWidths) {
         out.print("+");
         for (int w : colWidths) {
@@ -138,20 +123,104 @@ public class OutputFormatter {
         int rightPadding = w - s.length() - leftPadding;
         return repeat(' ', leftPadding) + s + repeat(' ', rightPadding);
     }
-
     private String leftAlign(String s, int w) {
         if (s.length() >= w) return s;
         return s + repeat(' ', w - s.length());
     }
-
     private String rightAlign(String s, int w) {
         if (s.length() >= w) return s;
         return repeat(' ', w - s.length()) + s;
     }
-
     private String repeat(char ch, int count) {
+        if (count <= 0) return "";
         char[] arr = new char[count];
-        for (int i = 0; i < count; i++) arr[i] = ch;
+        Arrays.fill(arr, ch);
         return new String(arr);
+    }
+
+    // Printer interface and implementations:
+
+    public interface Printer {
+        List<Class<?>> supported();
+        int length(Object obj);
+        String print(Object obj);
+    }
+
+    public static class StringPrinter implements Printer {
+        @Override
+        public List<Class<?>> supported() { return Collections.singletonList(String.class); }
+        @Override
+        public int length(Object obj) { return obj == null ? 1 : print(obj).length(); }
+        @Override
+        public String print(Object obj) {
+            return obj == null ? "-" : obj.toString().replace("\n", " ");
+        }
+    }
+
+    public static class DatePrinter implements Printer {
+        private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("dd.MM.yyyy");
+        @Override
+        public List<Class<?>> supported() { return Collections.singletonList(Date.class); }
+        @Override
+        public int length(Object obj) { return obj == null ? 1 : print(obj).length(); }
+        @Override
+        public String print(Object obj) {
+            return obj == null ? "-" : DATE_FORMAT.format((Date)obj);
+        }
+    }
+
+    public static class DoublePrinter implements Printer {
+        private static final DecimalFormat MONEY_FORMAT;
+        static {
+            DecimalFormatSymbols symbols = new DecimalFormatSymbols(new Locale("ru", "RU"));
+            symbols.setGroupingSeparator(' ');
+            symbols.setDecimalSeparator(',');
+            MONEY_FORMAT = new DecimalFormat("#,##0.00", symbols);
+            MONEY_FORMAT.setGroupingUsed(true);
+        }
+        @Override
+        public List<Class<?>> supported() {
+            return Arrays.asList(Double.class, Float.class);
+        }
+        @Override
+        public int length(Object obj) { return obj == null ? 1 : print(obj).length(); }
+        @Override
+        public String print(Object obj) {
+            if (obj == null) return "-";
+            double d = ((Number)obj).doubleValue();
+            return MONEY_FORMAT.format(d);
+        }
+    }
+
+    public static class NumberPrinter implements Printer {
+        private static final DecimalFormat NUMBER_FORMAT;
+        static {
+            DecimalFormatSymbols symbols = new DecimalFormatSymbols(new Locale("ru", "RU"));
+            symbols.setGroupingSeparator(' ');
+            symbols.setDecimalSeparator(',');
+            NUMBER_FORMAT = new DecimalFormat("#,###", symbols);
+            NUMBER_FORMAT.setGroupingUsed(true);
+        }
+        @Override
+        public List<Class<?>> supported() {
+            return Arrays.asList(Integer.class, Long.class, Short.class, Byte.class);
+        }
+        @Override
+        public int length(Object obj) { return obj == null ? 1 : print(obj).length(); }
+        @Override
+        public String print(Object obj) {
+            if (obj == null) return "-";
+            long l = ((Number)obj).longValue();
+            return NUMBER_FORMAT.format(l);
+        }
+    }
+
+    public static class AnyPrinter implements Printer {
+        @Override
+        public List<Class<?>> supported() { return Collections.emptyList(); }
+        @Override
+        public int length(Object obj) { return obj == null ? 1 : print(obj).length(); }
+        @Override
+        public String print(Object obj) { return obj == null ? "-" : Objects.toString(obj); }
     }
 }
